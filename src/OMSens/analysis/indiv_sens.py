@@ -6,6 +6,7 @@ import re  # regular expressions
 import unicodedata  # slugifying file names
 
 import pandas  # dataframes
+import numpy as np # arrays
 
 import filesystem.files_aux as files_aux
 import plotting.plot_heatmap as heatmap_f
@@ -329,27 +330,50 @@ def slugify(value):
 
 
 def rootMeanSquareForVar(df_std_run, df_param_perturbed, rms_first_year, rms_last_year, target_var):
-    # Get the columns from year to year indicated for std run and perturbed param run
-    col_subyrs_std = df_std_run[target_var].loc[rms_first_year:rms_last_year]
-    col_subyrs_perturbed = df_param_perturbed[target_var].loc[rms_first_year:rms_last_year]
-    # Assert that both columns have the same number of rows
-    raiseErrorIfDifferentLengthsInDFs(df_std_run, df_param_perturbed)
-    # Calculate root mean square from both columns
-    diff = col_subyrs_std - col_subyrs_perturbed
+    # filter by masking the arrays, better than using .loc
+    mask_std = (df_std_run.index >= rms_first_year) & (df_std_run.index <= rms_last_year)
+    mask_pert = (df_param_perturbed.index >= rms_first_year) & (df_param_perturbed.index <= rms_last_year)
+    
+    # Extrahiere Zeit (x) und Werte (y) als Numpy-Arrays
+    t_std = df_std_run.index[mask_std].to_numpy()
+    y_std = df_std_run.loc[mask_std, target_var].to_numpy()
+    
+    t_pert = df_param_perturbed.index[mask_pert].to_numpy()
+    y_pert = df_param_perturbed.loc[mask_pert, target_var].to_numpy()
+
+    # resample perturbed timeseries to unperturbed time-axis for improved handling of different samplings
+    y_pert_interp = np.interp(t_std, t_pert, y_pert)
+
+    diff = y_std - y_pert_interp
     diff_squared = diff ** 2
-    mean_diff_squared = diff_squared.mean()
+    
+    mean_diff_squared = np.mean(diff_squared)
     rms = math.sqrt(mean_diff_squared)
+    
     return rms
 
 def varAnalysisForPerturbedParam(df_std_run, df_param_perturbed, target_var, specific_year, rms_first_year,
                                  rms_last_year):
     # Get values for variable from standard run and perturbed run outputs and an specific year
-    var_std_value_for_year = df_std_run[target_var][specific_year]
-    var_new_value_for_year = df_param_perturbed[target_var][specific_year]
+    idx_pos_std = df_std_run.index.get_indexer([specific_year], method='nearest')[0]
+    var_std_value_for_year = df_std_run[target_var].iloc[idx_pos_std]
+
+    idx_pos_pert = df_param_perturbed.index.get_indexer([specific_year], method='nearest')[0]
+    var_new_value_for_year = df_param_perturbed[target_var].iloc[idx_pos_pert]
+    
     # Calculate sensitivity methods for an specific year
-    std_div_new = var_std_value_for_year / var_new_value_for_year
-    perturbation_proportion = (var_new_value_for_year - var_std_value_for_year) / var_std_value_for_year
+    if var_new_value_for_year == 0:
+         std_div_new = 0 # oder np.nan, je nach Logik
+    else:
+         std_div_new = var_std_value_for_year / var_new_value_for_year
+
+    if var_std_value_for_year == 0:
+        perturbation_proportion = 0 # Vermeidung von ZeroDivisionError
+    else:
+        perturbation_proportion = (var_new_value_for_year - var_std_value_for_year) / var_std_value_for_year
+    
     perturbation_proportion_abs = abs(perturbation_proportion)
+    
     # Calculate sensitivity methods for the whole run
     rootMeanSquare = rootMeanSquareForVar(df_std_run, df_param_perturbed, rms_first_year, rms_last_year, target_var)
 
